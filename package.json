@@ -1,0 +1,25 @@
+{
+  "name": "postman-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "concurrently \"npm run server\" \"npm run dbserver\"",
+    "server": "node server.js",
+    "dbserver": "node dbserver.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "concurrently": "^9.1.2",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "form-data": "^4.0.1",
+    "https": "^1.0.0",
+    "mongoose": "^8.9.5",
+    "node-fetch": "^2.7.0",
+    "require": "^2.4.20"
+  }
+}
