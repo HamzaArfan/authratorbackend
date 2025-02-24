@@ -30,87 +30,226 @@ const UserSchema = new mongoose.Schema({
     apiName: { type: String },
     folderName: { type: String },
     requestDetails: {
-      headers: [{ key: String, value: String }],
-      body: mongoose.Schema.Types.Mixed,
-      queryParams: [{ key: String, value: String }],
-      auth: mongoose.Schema.Types.Mixed
+      headers: [{ 
+        key: String, 
+        value: String,
+        description: String,
+        enabled: { type: Boolean, default: true }
+      }],
+      queryParams: [{ 
+        key: String, 
+        value: String,
+        description: String,
+        enabled: { type: Boolean, default: true }
+      }],
+      body: {
+        type: { type: String, enum: ['none', 'raw', 'formData', 'urlencoded'] },
+        content: mongoose.Schema.Types.Mixed,
+        formData: [{
+          key: String,
+          value: String,
+          description: String,
+          enabled: Boolean,
+          type: { type: String, enum: ['text', 'file'] }
+        }],
+        urlencoded: [{
+          key: String,
+          value: String,
+          description: String,
+          enabled: Boolean
+        }]
+      },
+      auth: {
+        type: { type: String, enum: ['none', 'basic', 'bearer', 'apiKey', 'config-jwt', 'avq-jwt'] },
+        basic: {
+          username: String,
+          password: String
+        },
+        bearer: String,
+        apiKey: {
+          key: String,
+          value: String,
+          in: { type: String, enum: ['header', 'query'] }
+        },
+        jwt: {
+          key: String,
+          value: String,
+          pairs: [{ key: String, value: String }]
+        },
+        avqJwt: {
+          value: String
+        }
+      }
     },
     responseDetails: {
-      headers: mongoose.Schema.Types.Mixed,
-      body: mongoose.Schema.Types.Mixed
+      headers: [{ key: String, value: String }],
+      body: mongoose.Schema.Types.Mixed,
+      cookies: [{ 
+        name: String,
+        value: String,
+        domain: String,
+        path: String,
+        expires: Date,
+        httpOnly: Boolean,
+        secure: Boolean
+      }]
+    },
+    settings: {
+      followRedirects: { type: Boolean, default: true },
+      timeout: { type: Number, default: 0 },
+      sslVerification: { type: Boolean, default: true },
+      responseSizeLimit: { type: Number, default: 50 },
+      proxy: {
+        enabled: { type: Boolean, default: false },
+        url: String,
+        auth: {
+          username: String,
+          password: String
+        }
+      }
+    },
+    scripts: {
+      preRequest: String,
+      tests: String,
+      testResults: [{
+        name: String,
+        passed: Boolean,
+        error: String
+      }]
     },
     errorContext: {
       type: { type: String },
-      message: { type: String },
-      details: mongoose.Schema.Types.Mixed
-    }
+      message: String,
+      details: mongoose.Schema.Types.Mixed,
+      stack: String
+    },
+    environmentVariables: [{
+      key: String,
+      value: String,
+      enabled: Boolean
+    }]
   });
   const User = mongoose.model('User', UserSchema);
   const RequestHistory = mongoose.model('RequestHistory', RequestHistorySchema);
-  
-app.post('/api/request-history', async (req, res) => {
+  app.post('/api/request-history', async (req, res) => {
     try {
-      const { 
-        userId, 
-        method, 
-        url, 
-        status, 
-        responseTime, 
-        responseSize, 
-        success, 
-        apiName, 
-        folderName, 
-        requestDetails 
-      } = req.body;
+      const requestData = req.body;
+      
+      // Process and validate cookies if present
+      if (requestData.responseDetails?.cookies) {
+        requestData.responseDetails.cookies = requestData.responseDetails.cookies.map(cookie => ({
+          ...cookie,
+          expires: cookie.expires ? new Date(cookie.expires) : undefined
+        }));
+      }
   
-      const newRequestHistory = new RequestHistory({
-        userId,
-        method,
-        url,
-        status,
-        responseTime,
-        responseSize,
-        success,
-        apiName,
-        folderName,
-        requestDetails
-      });
-  
+      // Create new request history entry
+      const newRequestHistory = new RequestHistory(requestData);
       await newRequestHistory.save();
-      res.status(201).json({ success: true, requestHistory: newRequestHistory });
+  
+      res.status(201).json({ 
+        success: true, 
+        requestHistory: newRequestHistory 
+      });
     } catch (error) {
       console.error('Error saving request history:', error);
-      res.status(500).json({ success: false, message: 'Failed to save request history' });
-    }
-  });
-  
-  app.get('/api/request-history/:userId', async (req, res) => {
-    try {
-      const { userId } = req.params;
-      const { limit = 50, page = 1 } = req.query;
-  
-      const requestHistories = await RequestHistory.find({ userId })
-        .sort({ timestamp: -1 })
-        .skip((page - 1) * limit)
-        .limit(Number(limit));
-  
-      const total = await RequestHistory.countDocuments({ userId });
-  
-      res.json({
-        success: true,
-        requestHistories,
-        pagination: {
-          total,
-          page: Number(page),
-          limit: Number(limit),
-          totalPages: Math.ceil(total / limit)
-        }
+      res.status(500).json({ 
+        success: false, 
+        message: 'Failed to save request history',
+        error: error.message 
       });
-    } catch (error) {
-      console.error('Error fetching request history:', error);
-      res.status(500).json({ success: false, message: 'Failed to fetch request history' });
     }
   });
+  
+  // Enhanced get request history endpoint with filtering and pagination
+app.get('/api/request-history/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { 
+      page = 1, 
+      limit = 50,
+      method,
+      status,
+      apiName,
+      folderName,
+      startDate,
+      endDate,
+      success,
+      searchQuery
+    } = req.query;
+
+    // Build filter object
+    const filter = { userId };
+    
+    if (method) filter.method = method.toUpperCase();
+    if (status) filter.status = parseInt(status);
+    if (apiName) filter.apiName = { $regex: apiName, $options: 'i' };
+    if (folderName) filter.folderName = { $regex: folderName, $options: 'i' };
+    if (success !== undefined) filter.success = success === 'true';
+    
+    if (startDate || endDate) {
+      filter.timestamp = {};
+      if (startDate) filter.timestamp.$gte = new Date(startDate);
+      if (endDate) filter.timestamp.$lte = new Date(endDate);
+    }
+
+    if (searchQuery) {
+      filter.$or = [
+        { url: { $regex: searchQuery, $options: 'i' } },
+        { apiName: { $regex: searchQuery, $options: 'i' } },
+        { folderName: { $regex: searchQuery, $options: 'i' } },
+        { 'requestDetails.body.content': { $regex: searchQuery, $options: 'i' } }
+      ];
+    }
+
+    // Execute query with pagination
+    const requestHistories = await RequestHistory.find(filter)
+      .sort({ timestamp: -1 })
+      .skip((page - 1) * limit)
+      .limit(Number(limit));
+
+    // Get total count for pagination
+    const total = await RequestHistory.countDocuments(filter);
+
+    // Get statistics
+    const stats = await RequestHistory.aggregate([
+      { $match: filter },
+      { 
+        $group: {
+          _id: null,
+          avgResponseTime: { $avg: '$responseTime' },
+          maxResponseTime: { $max: '$responseTime' },
+          minResponseTime: { $min: '$responseTime' },
+          successCount: { 
+            $sum: { $cond: ['$success', 1, 0] }
+          },
+          failureCount: { 
+            $sum: { $cond: ['$success', 0, 1] }
+          }
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      requestHistories,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / limit)
+      },
+      statistics: stats[0] || null
+    });
+  } catch (error) {
+    console.error('Error fetching request history:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch request history',
+      error: error.message 
+    });
+  }
+});
 
 app.post('/api/signup', async (req, res) => {
   try {
@@ -230,6 +369,52 @@ app.post('/api/collections', async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to create collection' });
   }
 });
+
+app.put('/api/collections/:collectionId/rename', async (req, res) => {
+  try {
+    const { collectionId } = req.params;
+    const { newName } = req.body;
+
+    const updatedCollection = await Collection.findByIdAndUpdate(
+      collectionId,
+      { name: newName },
+      { new: true }
+    );
+
+    if (!updatedCollection) {
+      return res.status(404).json({ success: false, message: 'Collection not found' });
+    }
+
+    res.json({ success: true, collection: updatedCollection });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to rename collection' });
+  }
+});
+
+// Route to rename an API
+app.put('/api/apis/:apiId/rename', async (req, res) => {
+  try {
+    const { apiId } = req.params;
+    const { newName } = req.body;
+
+    const updatedApi = await Api.findByIdAndUpdate(
+      apiId,
+      { name: newName },
+      { new: true }
+    );
+
+    if (!updatedApi) {
+      return res.status(404).json({ success: false, message: 'API not found' });
+    }
+
+    res.json({ success: true, api: updatedApi });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to rename API' });
+  }
+});
+
+
+
 
 app.get('/api/collections/:userId', async (req, res) => {
   try {

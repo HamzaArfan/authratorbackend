@@ -2,13 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
+const { Headers } = require('node-fetch');  // Add this import
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-
 
 const errorMessages = {
   400: 'Bad Request: Invalid request format or parameters.',
@@ -21,8 +20,7 @@ const errorMessages = {
 
 app.post('/api/proxy', async (req, res) => {
   try {
-    const { method, url, headers, body, bodyType, settings } = req.body;
-    
+    const { method, url, headers = [], body, bodyType, settings } = req.body;
 
     if (!url) {
       return res.status(400).json({
@@ -32,40 +30,45 @@ app.post('/api/proxy', async (req, res) => {
       });
     }
     
-        const timeout = settings?.timeout || 30000; 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const timeout = settings?.timeout || 30000; 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
     
+    // Create headers object using node-fetch Headers
     const requestHeaders = new Headers();
-    if (headers && headers.length > 0) {
+    if (Array.isArray(headers)) {
       headers.forEach(header => {
-        if (header.key && header.value) {
+        if (header?.key && header?.value) {
           requestHeaders.append(header.key, header.value);
         }
       });
     }
 
     let requestBody = null;
-    if (bodyType === 'raw') {
+    if (bodyType === 'raw' && body?.type === 'raw') {
       requestBody = body.content;
       if (!requestHeaders.has('Content-Type')) {
         requestHeaders.set('Content-Type', 'application/json');
       }
-    } else if (bodyType === 'formData') {
+    } else if (bodyType === 'formData' && body?.type === 'formData') {
       const formData = new FormData();
-      body.formData.forEach(item => {
-        if (item.key && item.value) {
-          formData.append(item.key, item.value);
-        }
-      });
+      if (Array.isArray(body.formData)) {
+        body.formData.forEach(item => {
+          if (item?.key && item?.value) {
+            formData.append(item.key, item.value);
+          }
+        });
+      }
       requestBody = formData;
-    } else if (bodyType === 'urlencoded') {
+    } else if (bodyType === 'urlencoded' && body?.type === 'urlencoded') {
       const params = new URLSearchParams();
-      body.urlencoded.forEach(item => {
-        if (item.key && item.value) {
-          params.append(item.key, item.value);
-        }
-      });
+      if (Array.isArray(body.urlencoded)) {
+        body.urlencoded.forEach(item => {
+          if (item?.key && item?.value) {
+            params.append(item.key, item.value);
+          }
+        });
+      }
       requestBody = params;
       requestHeaders.set('Content-Type', 'application/x-www-form-urlencoded');
     }
@@ -80,10 +83,12 @@ app.post('/api/proxy', async (req, res) => {
     });
 
     clearTimeout(timeoutId);
+    
+    // Convert headers to plain object
     const responseHeaders = {};
-    response.headers.forEach((value, key) => {
+    for (const [key, value] of response.headers) {
       responseHeaders[key] = value;
-    });
+    }
 
     if (!response.ok) {
       const errorResponse = {
